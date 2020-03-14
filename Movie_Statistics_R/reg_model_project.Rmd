@@ -1,0 +1,371 @@
+---
+title: "Modeling and Prediction for Movies"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+* * *
+
+## Setup
+
+##### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(statsr)
+library(GGally)
+library(knitr)
+library(viridis)
+library(gridExtra)
+library(car)
+```
+
+##### Load data
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+* * *
+
+## Part 1: Data
+
+The dataset contains more than 600 randomly sampled movies produced and 
+released before 2016. The rates are from 2 popular movie review websites, Rotten Tomatoes and IMDB. The size of sampling is big enough for regression analysis. Random sampling ensures no bias for the analysis.
+
+Obviously, the data is for an observational study and no causality can be gathered. We can only find some associations between the given variables. If we want to conduct a causal study, more experimental data is necessary.
+
+* * *
+
+## Part 2: Research question
+
+**What variables are strongly associated with the movie ratings?**
+
+Because movie ratings are an overall evaluation for a movie, which represents the audiences' impressions to the movie. Meanwhile, the ratings may drive other audiences to choose watching the movie or not. Therefore, the movie ratings reflect the quality of a movie and influence the popularity of a movie.
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+##### Check data quality
+First let's see if there are repetitive movies in our dataset. 
+```{r echo=FALSE}
+rep_movie <- movies %>% 
+  group_by(title) %>%  
+  mutate(index = n()) %>%
+  filter(index > 1) %>%
+  ungroup()
+kable(rep_movie[c('title', 'studio', 'thtr_rel_year', 'runtime', 'director')])
+```
+
+Although 4 titles are repetitive, only movie Man on Wire is a repetitive data. Therefore, we remove that record.
+```{r echo=FALSE}
+movies <- movies[!duplicated(movies), ]
+```
+
+Then, we check the NA values in our dataset.
+```{r eval=FALSE}
+summary(movies)
+```
+* `runtime`: 1 NA
+* `studio`: 8 NAs
+* `dvd_rel_year`: 8 NAs
+* `dvd_rel_month`: 8 NAs
+* `dvd_rel_day`: 8 NAs
+
+```{r}
+movies <- movies[!is.na(movies['runtime']), ]
+```
+
+##### Data Visualization and Exploration 
+In our dataset, there are three numerical ratings for movies coming from different platforms and different types of audiences.
+
+`imdb_rating`: Rating on IMDB (0-10 scale)
+
+`critics_score`: Critics score on Rotten Tomatoes (0-100 scale)
+
+`audience_score`: Audience score on Rotten Tomatoes (0-100 scale)
+
+For convinience, we unify the scales for ratings from different platform. Change the 0-10 scale of ratings on IMDB to 0-100 scale.
+```{r}
+movies['imdb_rating'] <- movies['imdb_rating'] * 10
+```
+
+Then we have a look at the correlation between these three ratings
+```{r}
+ggpairs(movies, columns = c(13,16,18))
+```
+From the plots, we observe that these three scores are highly positively correlated. It is possible that that we construct an average rating based on the three ratings. 
+
+```{r}
+movies <- movies %>% 
+  mutate(avg_score = (imdb_rating + critics_score + audience_score)/3 )
+```
+
+
+```{r}
+p2<-ggplot(movies, aes(x=runtime, y=avg_score, color=genre)) + 
+  geom_point(alpha=0.5) + 
+  scale_color_brewer(palette="Paired")
+p2
+```
+
+Runtime of most movies is around 100 minutes. The linear relationship bwteeen runtime and average score is not obvious. From the plot, the score distributions for different genre are hard to find. 
+
+
+```{r}
+kable(summary(movies$genre))
+movies %>%
+  mutate(genre = fct_reorder(genre, avg_score)) %>%
+  group_by(genre) %>%
+  mutate(weight = 1 / n()) %>%
+  ggplot(aes(x=avg_score, color=genre, fill=genre)) +
+  geom_histogram(aes(weight = weight), alpha=0.6, binwidth = 5) +
+  scale_fill_viridis(discrete=TRUE) +
+  scale_color_viridis(discrete=TRUE) +
+  theme(
+    legend.position="none",
+    panel.spacing = unit(0.1, "lines"),
+    strip.text.x = element_text(size = 8)
+  ) +
+  xlab("Score") +
+  ylab("Proportion in Sepcific Genre Group") +
+  xlim(10, 95) +
+  facet_wrap(~genre)
+```
+
+From the plot, we can see that ratings for movies about musical & performing arts and documentary are left skewed (all data above 50) and shows an peak on 85-90 interval. The drama movies also show left skewed. Scientific Fiction and fantasy movies are polarized. Ratings for comedy are not extremely low (below 25), but there's a large proportion of ratings between 25-35. Action & adventure, mystry & suspense, art House & international movies are approximately normal distribution. Therefore, the distribution of ratings for different genres of movies do diversed. 
+
+
+```{r}
+kable(summary(movies$mpaa_rating))
+movies %>%
+  mutate(mpaa_rating = fct_reorder(mpaa_rating, avg_score)) %>%
+  group_by(mpaa_rating) %>%
+  mutate(weight = 1 / n()) %>%
+  ggplot(aes(x=avg_score, color=mpaa_rating, fill=mpaa_rating)) +
+  geom_histogram(aes(weight = weight), alpha=0.6, binwidth = 5) +
+  scale_fill_viridis(discrete=TRUE) +
+  scale_color_viridis(discrete=TRUE) +
+  theme(
+    legend.position="none",
+    panel.spacing = unit(0.1, "lines"),
+    strip.text.x = element_text(size = 8)
+  ) +
+  xlab("Score") +
+  ylab("Proportion in Sepcific MPAA Rating Group") +
+  xlim(10, 95) +
+  facet_wrap(~mpaa_rating)
+```
+
+From the plot, we can observe that the rating distributions are dissimilar for different MPAA ratings. The ratings of PG-13 movies most distribute from 30 to 90 and ratings between 50-65 is a large proportion. The ratings of PG movies has 2 peaks around 55 and 75 score. Ratings of R movies are left skewed distributed. NC-17 movies have very little samples. Ratings of G and unrated movies are extremely left skewed distributed. Among the samples, the sum of numbers of NC-17, G and unrated movies is 70, which is a small part in the samples.
+
+```{r}
+movies %>%
+  ggplot(aes(sqrt(imdb_num_votes), avg_score, color=mpaa_rating)) + 
+  geom_point(alpha=0.5) + 
+  scale_color_brewer(palette="Paired") + 
+  xlab("Sqrt IMDB Vote Number") + 
+  ylab("Average Score")
+```
+
+```{r}
+movies %>%
+  ggplot(aes(imdb_num_votes, avg_score, color=mpaa_rating)) + 
+  scale_x_log10() + 
+  geom_point(alpha=0.5) + 
+  scale_color_brewer(palette="Paired") + 
+  xlab("Log IMDB Vote Number") + 
+  ylab("Average Score")
+```
+
+The range of imdb vote number is wide, so we use log scale and square root for x axis. For movies with some mpaa_ratings (i.e. PG-13, R), we can observe some kind of linear relationship between average score and log (square root) IMDB vote number.
+
+A lot of movie studios are in our dataset. Some of them are famous and produced many movies. Let's check the studio which produced more than 15 movies. 
+
+```{r}
+kable(summary(movies$studio)[summary(movies$studio) > 15])
+studio_name <- names(summary(movies$studio))[which(summary(movies$studio) > 15)]
+studio_name <- studio_name[-which(studio_name=='(Other)')]
+
+movies <- movies %>%
+  mutate(studio = as.character(studio)) %>%
+  mutate(studio_trans = ifelse(studio %in% studio_name, 1, 0))
+
+```
+
+8 movie studios produced more than 15 movies. The total number is more than 1/3 of our dataset. We make a new data column for whether the movie are produced by these 8 large studios.
+
+
+* * *
+
+## Part 4: Modeling
+
+##### Model Building and Model Selection
+First, we build model with orginal data. The model statistically significant with F-statistic=17.29 (df$_1$=25, df$_2$=623). The residual standard error is 14.28. Some variables are not statistically significant and the R$^2$ and adjusted R$^2$ are only 0.4097 and 0.386 respectively. The model explains only 40.97% variability of the response variable.
+
+```{r}
+# The full model 
+m0 <- lm(data = movies, avg_score ~ runtime + imdb_num_votes + title_type +
+           mpaa_rating + genre + best_pic_nom + best_pic_win + 
+           best_dir_win + best_actor_win + best_actress_win + 
+           top200_box)
+
+summary(m0)
+```
+
+If we add the created viariable with studio infomation and change the scale of `runtime` and `imdb_num_votes`, the R$^2$ and adjusted R$^2$ are slightly improved.
+
+```{r}
+# Add created studio infomation
+m1 <- lm(data = movies, avg_score ~ log(runtime) + sqrt(imdb_num_votes) + 
+           title_type + studio_trans + 
+           mpaa_rating + genre + best_pic_nom + best_pic_win + 
+           best_dir_win + best_actor_win + best_actress_win + 
+           top200_box)
+
+summary(m1)
+```
+
+Use the model selection to find a better linear model. By removing some variables, R$^2$ decreases a little but adjusted R$^2$ improves due to a more parsimonious regression model. In the model, only explanatary variable `best_pic_winyes` is -9.48 and not statistically significant. 
+
+```{r}
+m2 <- step(m1, direction = "both" , trace = FALSE)
+summary(m2)
+```
+
+If we remove the explanatary variable `best_pic_winyes`, the model and all explanatary variables are statistically significantly. 44.26% variability of variability in the response variables can be explained by the explanatory variable
+```{r}
+m3 <- lm(data = movies, avg_score ~ log(runtime) + sqrt(imdb_num_votes) + 
+           title_type + studio_trans + 
+           mpaa_rating + genre + best_pic_nom + 
+           best_dir_win)
+
+summary(m3)
+```
+
+
+##### Model Diagnostics
+
+* Linear relationship
+* Multivariate normality
+* No or little multicollinearity
+* No auto-correlation
+* Homoscedasticity
+
+Check multicollinearity: The variance inflation factor (after adjusting degree of freedom) is around 1, which shows weak multicollinearity in our model.
+```{r}
+vif(m3)
+```
+
+Residuals are randomly around 0 and do not show obvious shape. The residuals are basically normally distributed and there is a little curve in the Q-Q plot in the top and bottom but can be accepted. 
+
+Due to random sampling, the residuals are independent.
+
+Therefore, the linear regression model satisfies the model assumptions.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(m3)
+
+hist(m3$residuals , col = "steelblue" ,breaks = 25, main = "residuals distribution" , xlab = "residuals" )
+```
+```{r}
+hist(m3$residuals , col = "steelblue" ,breaks = 25, main = "residuals distribution" , xlab = "residuals" )
+```
+
+
+
+* * *
+
+## Part 5: Prediction
+
+##### Predict a 2019 movie Us(2019)
+```{r}
+predicted_movie <- data.frame(runtime = 116,
+                              imdb_num_votes = 186995,
+                              mpaa_rating = "R" ,
+                              genre = "Mystery & Suspense",
+                              title_type = "Feature Film",
+                              studio_trans = 1,
+                              best_pic_nom = "no",
+                              best_dir_win = "no")
+predict(m3 , predicted_movie , interval = "prediction" , level = 0.95 )
+
+```
+
+The score of the movie:
+
+* IMDb: 6.9
+
+* RT_critics: 93
+
+* RT_audiences: 59
+
+* **Average score: 73.6**
+
+* **Predicted average score: 65.7** (Falls between the confidence interval and 8 lower than the actual value)
+
+##### Predict a 2017 movie War for the Planet of the Apes
+```{r}
+predicted_movie <- data.frame(runtime = 140,
+                              imdb_num_votes = 214141,
+                              mpaa_rating = "PG-13" ,
+                              genre = "Drama",
+                              title_type = "Feature Film",
+                              studio_trans = 1,
+                              best_pic_nom = "no",
+                              best_dir_win = "no")
+predict(m3 , predicted_movie , interval = "prediction" , level = 0.95 )
+
+```
+
+The score of the movie:
+
+* IMDb: 7.4
+
+* RT_critics: 94
+
+* RT_audiences: 84
+
+* **Average score: 84**
+
+* **Predicted average score: 69.1** (Falls between the confidence interval and 15 lower than the actual value)
+
+##### Predict a 2019 movie Joker
+```{r}
+predicted_movie <- data.frame(runtime = 122,
+                              imdb_num_votes = 710243,
+                              mpaa_rating = "R" ,
+                              genre = "Action & Adventure",
+                              title_type = "Feature Film",
+                              studio_trans = 1,
+                              best_pic_nom = "yes",
+                              best_dir_win = "no")
+predict(m3 , predicted_movie , interval = "prediction" , level = 0.95 )
+
+```
+
+The score of the movie:
+
+* IMDb: 8.6
+
+* RT_critics: 68
+
+* RT_audiences: 88
+
+* **Average score: 80.66**
+
+* **Predicted average score: 85.6** (Falls between the confidence interval and 5 higher than the actual value)
+
+* * *
+
+## Part 6: Conclusion
+
+In this linear regression case, we explore the sample data by visualizing and build a regression model to predict the score for a movie. For our dataset, we lack data for some specific genre and MMPA rating. Meanwhile, most of our available exploratary variables are categorical, which is relatively hard to build a perfect regression model. In the prediction part, we use three movies after 2016 to test the prediction result. All the prediction results are in the 95% confidence interval.
+
